@@ -380,6 +380,29 @@
     user-select: none;
   }
   tbody tr.sheet-header-row td.selected-col { background: #a8c4e8; }
+  tbody tr.sheet-header-row td.beyond-table-header {
+    background: white !important;
+    border: none !important;
+    font-weight: 400;
+    color: transparent;
+  }
+  tbody tr.sheet-header-row td.beyond-table-header .header-filter-btn { display: none; }
+  tbody td.blank-cell, #excel-col-row th.blank-col-header {
+    background: white !important;
+    border: none !important;
+  }
+  #csv-table.no-gridlines tbody td {
+    border: none !important;
+  }
+  #csv-table.no-gridlines tbody tr.even,
+  #csv-table.no-gridlines tbody tr.odd {
+    background: white;
+  }
+  #csv-table.no-gridlines tbody tr.sheet-header-row,
+  #csv-table.no-gridlines tbody tr.sheet-header-row td {
+    background: white !important;
+    border: none !important;
+  }
   tbody tr.sheet-header-row td.row-num {
     text-align: center;
     cursor: default;
@@ -997,6 +1020,10 @@ function _resolveColor(c, themeColors) {
   return null;
 }
 
+// ── Version ─────────────────────────────────────────────────────────────────
+let APP_VERSION = '…';
+fetch('/api/version').then(r => r.json()).then(d => { APP_VERSION = d.version; updateStatus(); });
+
 // ── State ──────────────────────────────────────────────────────────────────
 let S = { headers: [], rows: [], headerRowIndex: 0, columnWidths: [], filepath: null, modified: false };
 let _xlsxWb = null;          // ExcelJS workbook for style-preserving save
@@ -1007,6 +1034,13 @@ let _xlsxSheetOffsets = {};  // { sheetName: {rowOff, colOff} } — Excel row/co
 let _sheetImages = [];
 let _sheetMerges = [];
 let _conditionalFormats = [];
+let _tableDefinitions = [];
+let _showGridLines = true;
+
+function applyGridLinesSetting(show) {
+  _showGridLines = show;
+  document.getElementById('csv-table')?.classList.toggle('no-gridlines', !show);
+}
 let selectedRows = new Set();   // indices of selected rows
 let selectedCols = new Set();   // indices of selected columns
 let anchorRow = -1;             // shift-click anchor
@@ -1092,13 +1126,76 @@ function isFormulaValue(val) {
 
 function applyNumFmt(value, fmt) {
   if (typeof value !== 'number' || isNaN(value)) return null;
-  const section = fmt.split(';')[0] || fmt;
+
+  // Split format into sections (positive; negative; zero; text) on unquoted semicolons
+  const sections = [];
+  let cur = '', inQuote = false, depth = 0;
+  for (let i = 0; i < fmt.length; i++) {
+    const ch = fmt[i];
+    if (ch === '"') { inQuote = !inQuote; cur += ch; }
+    else if (inQuote) { cur += ch; }
+    else if (ch === '[') { depth++; cur += ch; }
+    else if (ch === ']') { depth--; cur += ch; }
+    else if (ch === ';' && depth === 0) { sections.push(cur); cur = ''; }
+    else { cur += ch; }
+  }
+  if (cur) sections.push(cur);
+
+  let section = sections[0] || fmt;
+  const useNegSection = value < 0 && sections.length > 1;
+  if (useNegSection)       section = sections[1];
+  else if (value === 0 && sections.length > 2) section = sections[2];
+
+  const absVal = Math.abs(value);
+
+  // Strip color directives [Red], [Blue], [Color3], etc.
+  section = section.replace(/\[[^\]]*\]/g, '');
+
   const isPct = section.includes('%');
-  const num = isPct ? value * 100 : value;
-  const m = section.match(/\.([0#]+)/);
-  const dp = m ? m[1].length : 0;
-  const result = dp > 0 ? num.toFixed(dp) : String(Math.round(num));
-  return isPct ? result + '%' : result;
+  const workVal = isPct ? absVal * 100 : absVal;
+
+  // Decimal places
+  const dpMatch = section.match(/\.([0#]+)/);
+  const dp = dpMatch ? dpMatch[1].length : 0;
+
+  // Thousands separator: comma before digit pattern chars
+  const bare = section.replace(/"[^"]*"/g, '').replace(/\\./g, '').replace(/_./g, '');
+  const hasComma = /[#0],[#0]/.test(bare) || /^[^.]*,[#0]/.test(bare);
+
+  // Format the number
+  let numStr = dp > 0 ? workVal.toFixed(dp) : String(Math.round(workVal));
+  if (hasComma) {
+    const parts = numStr.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    numStr = parts.join('.');
+  }
+  if (isPct) numStr += '%';
+
+  // Extract literal prefix/suffix from the format string
+  // Handles: "text" (quoted), \x (backslash-escape), _x (skip, padding placeholder)
+  let prefix = '', suffix = '', pastNum = false;
+  for (let i = 0; i < section.length; i++) {
+    const ch = section[i];
+    if (ch === '"') {
+      let j = i + 1;
+      while (j < section.length && section[j] !== '"') j++;
+      const lit = section.slice(i + 1, j);
+      if (pastNum) suffix += lit; else prefix += lit;
+      i = j;
+    } else if (ch === '\\') {
+      const lit = section[i + 1] || '';
+      if (pastNum) suffix += lit; else prefix += lit;
+      i++;
+    } else if (ch === '_') {
+      i++; // skip padding placeholder (_x = space the width of x)
+    } else if ('#0.,@%E*'.includes(ch)) {
+      pastNum = true;
+    }
+  }
+
+  // If the negative section handles its own sign (e.g. wraps in parens), don't prepend -
+  const negSign = (!useNegSection && value < 0) ? '-' : '';
+  return prefix + negSign + numStr + suffix;
 }
 
 function formatCellValue(value) {
@@ -1157,7 +1254,20 @@ function parseCellAddress(ref) {
   if (!match) return null;
   let col = 0;
   for (const ch of match[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
-  return { row: Number(match[2]) - 1, col: col - 1 };
+  // Convert 1-indexed Excel row to 0-indexed body row.
+  // When a header row exists, every Excel row after it maps to bodyRow = excelRow0 - 1
+  // because the header occupies a slot that is not in S.rows.
+  const excelRow0 = Number(match[2]) - 1;
+  const hi = sheetHeaderRowIndex();
+  let row;
+  if (hi < 0 || excelRow0 < hi) {
+    row = excelRow0;
+  } else if (excelRow0 === hi) {
+    row = -1; // refers to the header row itself; getRawCellValue returns '' for row < 0
+  } else {
+    row = excelRow0 - 1;
+  }
+  return { row, col: col - 1 };
 }
 
 function expandRange(refA, refB) {
@@ -1852,6 +1962,15 @@ function sheetRowNumberForBodyRow(rowIdx) {
 }
 
 function createHeaderCellContent(cell, colIdx, span) {
+  const explicitSt = _cellStyles?.headerStyles?.[colIdx] || null;
+  const isInAnyTable = _tableDefinitions?.some(t => colIdx >= t.colStart && colIdx <= t.colEnd);
+  const isBeyondTable = !isInAnyTable && S.headers?.[colIdx] === '';
+
+  if (isBeyondTable) {
+    cell.classList.add('beyond-table-header');
+    return;
+  }
+
   cell.title = 'Click to sort/select • Shift/Cmd+click to multi-select • Double-click to rename';
   cell.style.minWidth = '0';
   cell.dataset.colStart = String(colIdx);
@@ -1883,10 +2002,11 @@ function createHeaderCellContent(cell, colIdx, span) {
     if (!e.shiftKey && !e.metaKey && !e.ctrlKey) sortBy(colIdx);
   };
   cell.ondblclick = (e) => { e.stopPropagation(); renameColumn(colIdx); };
-  if (_cellStyles && _cellStyles.headerStyles[colIdx]) {
-    const st = _cellStyles.headerStyles[colIdx];
-    if (st) applyExcelStyle(cell, null, st);
-  }
+  const tblSt = tableStyleForCell('header', 0, colIdx);
+  const st = (explicitSt || tblSt)
+    ? { ...(tblSt || {}), ...(explicitSt || {}) }
+    : null;
+  if (st) applyExcelStyle(cell, null, st);
 }
 
 function shiftBodyMergesForRowInsert(insertAt) {
@@ -2204,19 +2324,23 @@ function sortFromFilterMenu(asc) {
 
 function renderHeaders() {
   const letterHeaders = hasExcelLetterHeaders();
+  const isXlsx = S.filetype === 'xlsx' || (S.filepath || '').toLowerCase().endsWith('.xlsx');
+  // Show the column-letter row whenever it's an xlsx file (like Excel always does)
+  // or when the headers themselves are the generated A/B/C letters.
+  const showLetterRow = letterHeaders || isXlsx;
   const excelTr = document.getElementById('excel-col-row');
   const tr = document.getElementById('header-row');
   excelTr.innerHTML = '';
   tr.innerHTML = '';
-  excelTr.className = letterHeaders ? '' : 'hidden-row';
+  excelTr.className = showLetterRow ? '' : 'hidden-row';
   tr.className = 'header-sizer-row';
-  if (letterHeaders) {
+  if (showLetterRow) {
     excelTr.appendChild(th('', 'row-num'));
   }
   tr.appendChild(th(letterHeaders ? '' : '#', 'row-num'));
 
   S.headers.forEach((h, i) => {
-    if (letterHeaders) {
+    if (showLetterRow) {
       const excelTh = document.createElement('th');
       excelTh.textContent = excelColName(i);
       excelTh.style.minWidth = '0';
@@ -2225,6 +2349,8 @@ function renderHeaders() {
       if (selectedCols.has(i)) excelTh.classList.add('selected-col');
       excelTh.title = 'Click to select column • Shift/Cmd+click to multi-select';
       excelTh.onclick = (e) => { selectCol(i, e); };
+      const inAnyTable = _tableDefinitions?.some(t => i >= t.colStart && i <= t.colEnd);
+      if (!inAnyTable && S.headers?.[i] === '') excelTh.classList.add('blank-col-header');
       excelTr.appendChild(excelTh);
     }
 
@@ -2324,6 +2450,52 @@ function conditionalStyleForCell(rowIdx, colIdx, conditionalStyles = null) {
   return conditionalStyles.get(`${rowIdx},${colIdx}`) || null;
 }
 
+function tableStyleForCell(area, rowIdx, colIdx) {
+  if (!_tableDefinitions?.length) return null;
+  for (const tbl of _tableDefinitions) {
+    if (colIdx < tbl.colStart || colIdx > tbl.colEnd) continue;
+    const bc = tbl.borderColor;
+    const border = bc ? { style: 'thin', color: bc } : null;
+    const isLeft  = colIdx === tbl.colStart;
+    const isRight = colIdx === tbl.colEnd;
+    const edgeBorders = (b) => Object.assign({},
+      b && isLeft  ? { borderLeft:  b } : {},
+      b && isRight ? { borderRight: b } : {}
+    );
+    // Table header row
+    if (area === 'header' && tbl.headerArea === 'header') {
+      return { bg: tbl.headerBg, color: tbl.headerColor, bold: true,
+               borderTop: border, borderBottom: border, ...edgeBorders(border) };
+    }
+    if (area !== 'body') continue;
+    if (tbl.headerArea === 'body' && rowIdx === tbl.headerBodyRow) {
+      return { bg: tbl.headerBg, color: tbl.headerColor, bold: true,
+               borderTop: border, borderBottom: border, ...edgeBorders(border) };
+    }
+    // Totals row
+    if (tbl.hasTotalsRow && rowIdx === tbl.totalsBodyRow) {
+      return { bold: true, borderBottom: border, ...edgeBorders(border) };
+    }
+    if (rowIdx < tbl.dataRowStart || rowIdx > tbl.dataRowEnd) continue;
+    const relRow = rowIdx - tbl.dataRowStart;
+    const relCol = colIdx - tbl.colStart;
+    const isLastDataRow = rowIdx === tbl.dataRowEnd;
+    let bg = null;
+    if (tbl.showColumnStripes) {
+      bg = relCol % 2 === 0 ? tbl.stripe1Bg : null;
+    } else if (tbl.showRowStripes) {
+      bg = relRow % 2 === 0 ? tbl.stripe1Bg : null;
+    }
+    const bold = (tbl.showFirstColumn && isLeft) || (tbl.showLastColumn && isRight);
+    const borders = Object.assign({},
+      isLastDataRow ? { borderBottom: border } : {},
+      edgeBorders(border)
+    );
+    return Object.assign({}, bg ? { bg } : {}, bold ? { bold: true } : {}, borders);
+  }
+  return null;
+}
+
 function canSpillHeaderIntoNextCell(colIdx) {
   if (colIdx + 1 >= S.headers.length) return false;
   return !S.headers[colIdx + 1];
@@ -2344,7 +2516,8 @@ function headerSpillWidth(colIdx, span) {
 }
 
 function canSpillDisplayIntoNextCell(rowIdx, colIdx, bodyMergeMap = null, merges = null) {
-  if (colIdx + 1 >= S.headers.length) return false;
+  // Allow spilling a few columns beyond trimmed headers (Python removes all-empty trailing cols)
+  if (colIdx + 1 >= S.headers.length + 10) return false;
   merges = merges || normalizedSheetMerges();
   bodyMergeMap = bodyMergeMap || buildMergeMaps('body', merges);
   if (merges.some(m => m.area === 'body' && m.row === rowIdx && m.col === colIdx && m.colspan > 1)) return false;
@@ -2594,12 +2767,19 @@ function renderRows() {
       }
 
       const baseStyle = _cellStyles?.rowStyles?.[r]?.[c];
+      const tblStyle = tableStyleForCell('body', r, c);
       const conditionalStyle = conditionalStyleForCell(r, c, conditionalStyles);
-      const st = conditionalStyle ? { ...(baseStyle || {}), ...conditionalStyle } : baseStyle;
+      const st = (tblStyle || baseStyle || conditionalStyle)
+        ? { ...(tblStyle || {}), ...(baseStyle || {}), ...(conditionalStyle || {}) }
+        : null;
       if (oldValLabel) td.appendChild(oldValLabel);
       td.appendChild(inp);
       tr.appendChild(td);
       if (st) applyExcelStyle(td, inp, st);
+      // Mark empty unstyled cells outside any table as blank (no border/background)
+      if (!st && displayCellText(r, c) === '') {
+        td.classList.add('blank-cell');
+      }
       // Default numeric right-alignment (Excel "General" alignment behaviour)
       if (!st?.align && numericCellValue(displayCellText(r, c)) !== null) {
         td.style.textAlign = 'right';
@@ -3548,6 +3728,7 @@ function applySearch(term) {
   if (searchTerm) parts.push(`${count} match${count !== 1 ? 'es' : ''}`);
   if (searchCaseSensitive) parts.push('case');
   if (searchWholeWord) parts.push('word');
+  parts.push(`v${APP_VERSION}`);
   document.getElementById('status-right').textContent = parts.join(' · ');
 }
 
@@ -3667,12 +3848,16 @@ function openFile() {
         _sheetImages = sheets[0].images || [];
         _sheetMerges = sheets[0].merges || [];
         _conditionalFormats = sheets[0].conditionalFormats || [];
+        _tableDefinitions = sheets[0].tableDefinitions || [];
+        applyGridLinesSetting(sheets[0].showGridLines !== false);
         S.columnWidths = sheets[0].columnWidths || [];
       } else {
         _cellStyles = null;
         _sheetImages = [];
         _sheetMerges = [];
         _conditionalFormats = [];
+        _tableDefinitions = [];
+        applyGridLinesSetting(true);
         S.columnWidths = [];
       }
       _pendingClearColors = { bg: new Set(), color: new Set() };
@@ -3871,6 +4056,7 @@ function updateStatus() {
     (S.modified ? '  •  Unsaved changes' : '');
   const rightParts = [];
   if (searchTerm) rightParts.push(`${highlightCells.size} match${highlightCells.size !== 1 ? 'es' : ''}`);
+  rightParts.push(`v${APP_VERSION}`);
   document.getElementById('status-right').textContent = rightParts.join(' · ');
   const bgDisplay = document.getElementById('bg-color-display');
   if (bgDisplay) bgDisplay.textContent = `BG: ${currentSelectionBackgroundHex()}`;
@@ -4196,6 +4382,8 @@ async function loadVersion(sha) {
     _sheetImages = activeSheet.images || [];
     _sheetMerges = activeSheet.merges || [];
     _conditionalFormats = activeSheet.conditionalFormats || [];
+    _tableDefinitions = activeSheet.tableDefinitions || [];
+    applyGridLinesSetting(activeSheet.showGridLines !== false);
     setBaseline(S.headers, S.rows);
     resetColumnFilters();
     selectedRows = new Set(); selectedCols = new Set(); anchorRow = -1; anchorCol = -1;
@@ -4255,6 +4443,8 @@ async function loadVersion(sha) {
     _sheetImages = activeSheet.images || [];
     _sheetMerges = activeSheet.merges || [];
     _conditionalFormats = activeSheet.conditionalFormats || [];
+    _tableDefinitions = activeSheet.tableDefinitions || [];
+    applyGridLinesSetting(activeSheet.showGridLines !== false);
     setBaseline(S.headers, S.rows);
     resetColumnFilters();
     selectedRows = new Set(); selectedCols = new Set(); anchorRow = -1; anchorCol = -1;
@@ -4272,6 +4462,8 @@ async function loadVersion(sha) {
   _sheetImages = [];
   _sheetMerges = [];
   _conditionalFormats = [];
+  _tableDefinitions = [];
+  applyGridLinesSetting(true);
   setBaseline(headers, rows);
   resetColumnFilters();
   selectedRows = new Set(); selectedCols = new Set(); anchorRow = -1; anchorCol = -1;
@@ -4633,6 +4825,8 @@ async function switchSheet(idx) {
   _sheetImages = activeSh?.images || [];
   _sheetMerges = activeSh?.merges || [];
   _conditionalFormats = activeSh?.conditionalFormats || [];
+  _tableDefinitions = activeSh?.tableDefinitions || [];
+  applyGridLinesSetting(activeSh?.showGridLines !== false);
   S.columnWidths = activeSh?.columnWidths || S.columnWidths || [];
   setBaseline(S.headers, S.rows);
   resetColumnFilters();

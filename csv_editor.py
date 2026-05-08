@@ -6,6 +6,8 @@ Usage:
   python3 csv_editor.py data.csv     # open a file directly
 """
 
+APP_VERSION = "1.1.1"
+
 import base64
 import csv
 import io
@@ -416,6 +418,127 @@ def _dxf_to_style(dxf, theme_colors):
     return st or None
 
 
+def _is_dark_color(hex_color):
+    try:
+        r = int(hex_color[0:2], 16) / 255.0
+        g = int(hex_color[2:4], 16) / 255.0
+        b = int(hex_color[4:6], 16) / 255.0
+        return (0.299 * r + 0.587 * g + 0.114 * b) < 0.5
+    except Exception:
+        return False
+
+
+def _style_to_accent_idx(variant, num):
+    """Map a built-in table style variant+number to an accent color index (1-6), or 0 for neutral.
+
+    Excel groups styles in sets of 7: [neutral, Accent1, Accent2, Accent3, Accent4, Accent5, Accent6].
+    Light: 21 styles (3 groups of 7). Medium: 28 styles (4 groups of 7). Dark: 11 styles.
+    """
+    return (num - 1) % 7  # 0=neutral, 1-6=Accent1-6
+
+
+def _resolve_table_style_colors(style_name, theme_colors):
+    """Return header/stripe colors for a named built-in Excel table style."""
+    import re as _re
+    m = _re.match(r'TableStyle(Light|Medium|Dark)(\d+)', style_name or '')
+    if not m:
+        return {'headerBg': '#4472C4', 'headerColor': '#FFFFFF', 'stripe1Bg': '#D9E1F2', 'borderColor': '#4472C4'}
+    variant = m.group(1)
+    num = int(m.group(2))
+    accent_idx = _style_to_accent_idx(variant, num)
+    tc = theme_colors or []
+    if accent_idx >= 1 and len(tc) > accent_idx + 3:
+        accent_hex = tc[accent_idx + 3]
+    else:
+        accent_hex = tc[2] if len(tc) > 2 else '595959'
+    accent_hex = accent_hex.lstrip('#')
+    if variant == 'Light':
+        header_bg = '#' + _apply_tint(accent_hex, 0.4) if accent_idx else '#' + _apply_tint('595959', 0.7)
+        header_color = '#000000'
+        stripe1_bg = '#' + _apply_tint(accent_hex, 0.8) if accent_idx else '#' + _apply_tint('595959', 0.9)
+        border_color = '#' + accent_hex if accent_idx else '#' + _apply_tint('595959', 0.5)
+    elif variant == 'Dark':
+        header_bg = '#' + _apply_tint(accent_hex, -0.25) if accent_idx else '#' + _apply_tint('595959', -0.25)
+        header_color = '#FFFFFF'
+        stripe1_bg = '#' + accent_hex
+        border_color = '#' + _apply_tint(accent_hex, -0.25) if accent_idx else '#595959'
+    else:  # Medium
+        if accent_idx == 0:
+            header_bg = '#' + _apply_tint('595959', 0.25)
+            header_color = '#FFFFFF'
+            stripe1_bg = '#' + _apply_tint('595959', 0.85)
+            border_color = '#' + _apply_tint('595959', 0.5)
+        else:
+            header_bg = '#' + accent_hex
+            header_color = '#FFFFFF'  # Excel always uses white text on accent-colored Medium headers
+            stripe1_bg = '#' + _apply_tint(accent_hex, 0.8)
+            border_color = '#' + accent_hex
+    return {
+        'headerBg': header_bg,
+        'headerColor': header_color,
+        'stripe1Bg': stripe1_bg,
+        'borderColor': border_color,
+    }
+
+
+def _parse_table_definitions(ws, header_idx, theme_colors):
+    """Extract Excel table definitions with resolved style colors from a worksheet."""
+    tables_attr = getattr(ws, 'tables', None)
+    if not tables_attr:
+        return []
+    out = []
+    for table in (tables_attr.values() if hasattr(tables_attr, 'values') else tables_attr):
+        try:
+            min_col, min_row, max_col, max_row = openpyxl.utils.range_boundaries(table.ref)
+        except Exception:
+            continue
+        style_info = getattr(table, 'tableStyleInfo', None)
+        style_name = getattr(style_info, 'name', None) or ''
+        show_row_stripes = bool(getattr(style_info, 'showRowStripes', True))
+        show_col_stripes = bool(getattr(style_info, 'showColumnStripes', False))
+        show_first_col = bool(getattr(style_info, 'showFirstColumn', False))
+        show_last_col = bool(getattr(style_info, 'showLastColumn', False))
+        header_row_count = int(getattr(table, 'headerRowCount', 1) or 1)
+        totals_row_count = int(getattr(table, 'totalsRowCount', 0) or 0)
+        colors = _resolve_table_style_colors(style_name, theme_colors)
+        # Sheet row indices (0-based)
+        tbl_header_sheet_row = min_row - 1  # first row of the table (header)
+        data_start_sheet_row = min_row - 1 + header_row_count
+        data_end_sheet_row = max_row - 1 - totals_row_count
+        totals_sheet_row = max_row - 1 if totals_row_count else None
+        # Determine if the table header coincides with the promoted worksheet header
+        if header_idx is not None and header_idx >= 0 and tbl_header_sheet_row == header_idx:
+            header_area = 'header'
+            header_body_row = None
+        else:
+            header_area = 'body'
+            header_body_row = _sheet_row_to_body_row(tbl_header_sheet_row, header_idx)
+        data_row_start = _sheet_row_to_body_row(data_start_sheet_row, header_idx)
+        data_row_end = _sheet_row_to_body_row(data_end_sheet_row, header_idx)
+        totals_body_row = _sheet_row_to_body_row(totals_sheet_row, header_idx) if totals_sheet_row is not None else None
+        if data_row_start is None:
+            data_row_start = 0
+        if data_row_end is None:
+            data_row_end = data_row_start
+        out.append({
+            'colStart': min_col - 1,
+            'colEnd': max_col - 1,
+            'headerArea': header_area,
+            'headerBodyRow': header_body_row,
+            'dataRowStart': data_row_start,
+            'dataRowEnd': data_row_end,
+            'hasTotalsRow': totals_row_count > 0,
+            'totalsBodyRow': totals_body_row,
+            'showRowStripes': show_row_stripes,
+            'showColumnStripes': show_col_stripes,
+            'showFirstColumn': show_first_col,
+            'showLastColumn': show_last_col,
+            'styleName': style_name,
+            **colors,
+        })
+    return out
+
+
 def _parse_conditional_formats(ws, header_idx, theme_colors):
     out = []
     cf_rules = getattr(getattr(ws, 'conditional_formatting', None), '_cf_rules', {}) or {}
@@ -486,6 +609,10 @@ def _parse_xlsx_sheets_with_styles(raw_bytes):
                 if cell.data_type == 'f':
                     v = cell.value
                     f = v.text if hasattr(v, 'text') else (v or '')
+                    if isinstance(f, str):
+                        # Strip Excel's internal "future function" prefixes so
+                        # =_xlfn.XLOOKUP(...) displays as =XLOOKUP(...)
+                        f = f.replace('_xlfn._xlws.', '').replace('_xlfn.', '')
                     row_vals.append(f if f.startswith('=') else ('=' + f if f else f))
                 else:
                     row_vals.append(_cell_to_str_formatted(cell.value, cell.number_format))
@@ -528,6 +655,20 @@ def _parse_xlsx_sheets_with_styles(raw_bytes):
         while rows2d and all(v == '' for v in rows2d[-1]) and all(s is None for s in styles2d[-1]):
             rows2d.pop()
             styles2d.pop()
+        # Trim trailing completely-empty columns across all rows
+        if rows2d:
+            last_nonempty_col = max_col - 1
+            while last_nonempty_col >= 0 and all(
+                (row[last_nonempty_col] == '' if last_nonempty_col < len(row) else True)
+                for row in rows2d
+            ):
+                last_nonempty_col -= 1
+            if last_nonempty_col < max_col - 1:
+                trim = last_nonempty_col + 1
+                rows2d = [row[:trim] for row in rows2d]
+                styles2d = [st[:trim] for st in styles2d]
+                col_widths = col_widths[:trim]
+                max_col = trim
         header_idx = None
         if ws.auto_filter and ws.auto_filter.ref:
             try:
@@ -562,6 +703,9 @@ def _parse_xlsx_sheets_with_styles(raw_bytes):
             leading_styles = styles2d[:header_idx]
             trailing_styles = styles2d[header_idx + 1:] if len(styles2d) > header_idx + 1 else []
             header_idx_out = header_idx
+        show_grid = getattr(getattr(ws, 'sheet_view', None), 'showGridLines', True)
+        if show_grid is None:
+            show_grid = True
         sheets.append({
             'name': ws.title,
             'headers': headers,
@@ -573,6 +717,8 @@ def _parse_xlsx_sheets_with_styles(raw_bytes):
             'columnWidths': col_widths,
             'conditionalFormats': _parse_conditional_formats(ws, header_idx_out, theme_colors),
             'merges': _parse_sheet_merges(ws, header_idx_out),
+            'tableDefinitions': _parse_table_definitions(ws, header_idx_out, theme_colors),
+            'showGridLines': bool(show_grid),
         })
     return sheets
 
@@ -1088,6 +1234,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == '/':
             self._serve_html()
+        elif self.path == '/api/version':
+            self._json({'version': APP_VERSION})
         elif self.path == '/api/data':
             active = state.sheets[state.active_sheet]
             self._json({
