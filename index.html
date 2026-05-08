@@ -1854,6 +1854,8 @@ function pixelsToExcelWidth(px) {
 
 function applyColumnPixelWidths(widths) {
   const scale = _zoomPercent / 100;
+  const letterColumnCount = excelLetterColumnCount(widths);
+  const defaultPx = excelWidthToPixels(8.43);
   // Store scaled pixel widths so displaySpillWidth can use the real rendered values
   _colPxWidths = widths.map(px => Math.round(px * scale));
   const ths = document.querySelectorAll('#header-row th');
@@ -1894,6 +1896,14 @@ function applyColumnPixelWidths(widths) {
       excelTh.style.minWidth = width;
     }
   });
+  for (let c = widths.length; c < letterColumnCount; c++) {
+    const width = Math.round(defaultPx * scale) + 'px';
+    const excelTh = excelThs[c + 1];
+    if (excelTh) {
+      excelTh.style.width = width;
+      excelTh.style.minWidth = width;
+    }
+  }
 }
 
 function applySavedColumnWidths() {
@@ -2179,6 +2189,29 @@ function hasExcelLetterHeaders() {
   return S.headers.length > 0 && S.headers.every((h, i) => h === excelColName(i));
 }
 
+function excelLetterColumnCount(widths = null) {
+  const letterHeaders = hasExcelLetterHeaders();
+  const isXlsx = S.filetype === 'xlsx' || (S.filepath || '').toLowerCase().endsWith('.xlsx');
+  if (!letterHeaders && !isXlsx) return 0;
+
+  const scale = _zoomPercent / 100;
+  const defaultPx = excelWidthToPixels(8.43);
+  const wrap = document.getElementById('table-wrap');
+  const viewportPx = wrap?.clientWidth || window.innerWidth || 0;
+  const rowNumPx = Math.round(42 * scale);
+  let occupiedPx = rowNumPx;
+
+  for (let c = 0; c < S.headers.length; c++) {
+    const widthPx = widths?.[c] != null
+      ? widths[c] * scale
+      : (_colPxWidths[c] || (excelWidthToPixels(S.columnWidths?.[c]) || defaultPx) * scale);
+    occupiedPx += Math.round(widthPx);
+  }
+
+  const fillPx = Math.max(0, viewportPx - occupiedPx);
+  return S.headers.length + Math.ceil(fillPx / Math.max(1, defaultPx * scale));
+}
+
 function normalizedFilterValue(value) {
   return value == null ? '' : String(value);
 }
@@ -2338,6 +2371,7 @@ function renderHeaders() {
     excelTr.appendChild(th('', 'row-num'));
   }
   tr.appendChild(th(letterHeaders ? '' : '#', 'row-num'));
+  const letterColumnCount = excelLetterColumnCount();
 
   S.headers.forEach((h, i) => {
     if (showLetterRow) {
@@ -2364,6 +2398,14 @@ function renderHeaders() {
     sizer.style.minWidth = Math.round(120 * (_zoomPercent / 100)) + 'px';
     tr.appendChild(sizer);
   });
+
+  for (let i = S.headers.length; i < letterColumnCount; i++) {
+    const excelTh = document.createElement('th');
+    excelTh.textContent = excelColName(i);
+    excelTh.style.minWidth = '0';
+    excelTh.className = 'blank-col-header';
+    excelTr.appendChild(excelTh);
+  }
 }
 
 function applyExcelStyle(td, inp, st) {
