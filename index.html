@@ -805,13 +805,18 @@
   <div class="toolbar-menu" id="edit-menu">
     <button onclick="toggleEditMenu(event)">Edit ▾</button>
     <div class="toolbar-menu-panel">
-      <button onclick="menuAction(() => addRow(true))"><span>Insert Row Before</span><span class="menu-shortcut">Ctrl/Cmd+Alt+↑</span></button>
-      <button onclick="menuAction(addRow)"><span>Insert Row After</span><span class="menu-shortcut">Ctrl/Cmd+Alt+↓</span></button>
+      <button id="insert-row-before-btn" onclick="menuAction(() => addRow(true))"><span>Insert Row Before</span><span class="menu-shortcut">Ctrl/Cmd+Alt+↑</span></button>
+      <button id="insert-table-row-before-btn" hidden onclick="menuAction(() => addTableRow(true))"><span>Insert Table Row Before</span><span class="menu-shortcut">Ctrl/Cmd+Alt+↑</span></button>
+      <button id="insert-row-after-btn" onclick="menuAction(addRow)"><span>Insert Row After</span><span class="menu-shortcut">Ctrl/Cmd+Alt+↓</span></button>
+      <button id="insert-table-row-after-btn" hidden onclick="menuAction(addTableRow)"><span>Insert Table Row After</span><span class="menu-shortcut">Ctrl/Cmd+Alt+↓</span></button>
       <button id="remove-row-btn" onclick="menuAction(deleteSelectedRow)"><span>Remove Row</span><span class="menu-shortcut">Ctrl/Cmd+Alt+Shift+R</span></button>
       <button id="remove-table-row-btn" hidden onclick="menuAction(deleteSelectedTableRows)"><span>Remove Table Row</span><span class="menu-shortcut">Ctrl/Cmd+Alt+Shift+R</span></button>
-      <button onclick="menuAction(() => addColumn(true))"><span>Insert Column Before</span><span class="menu-shortcut">Ctrl/Cmd+Alt+←</span></button>
-      <button onclick="menuAction(addColumn)"><span>Insert Column After</span><span class="menu-shortcut">Ctrl/Cmd+Alt+→</span></button>
-      <button onclick="menuAction(deleteColumn)"><span>Remove Column</span><span class="menu-shortcut">Ctrl/Cmd+Alt+Shift+C</span></button>
+      <button id="insert-col-before-btn" onclick="menuAction(() => addColumn(true))"><span>Insert Column Before</span><span class="menu-shortcut">Ctrl/Cmd+Alt+←</span></button>
+      <button id="insert-table-col-before-btn" hidden onclick="menuAction(() => addTableColumn(true))"><span>Insert Table Column Before</span><span class="menu-shortcut">Ctrl/Cmd+Alt+←</span></button>
+      <button id="insert-col-after-btn" onclick="menuAction(addColumn)"><span>Insert Column After</span><span class="menu-shortcut">Ctrl/Cmd+Alt+→</span></button>
+      <button id="insert-table-col-after-btn" hidden onclick="menuAction(addTableColumn)"><span>Insert Table Column After</span><span class="menu-shortcut">Ctrl/Cmd+Alt+→</span></button>
+      <button id="remove-col-btn" onclick="menuAction(deleteColumn)"><span>Remove Column</span><span class="menu-shortcut">Ctrl/Cmd+Alt+Shift+C</span></button>
+      <button id="remove-table-col-btn" hidden onclick="menuAction(deleteSelectedTableColumns)"><span>Remove Table Column</span><span class="menu-shortcut">Ctrl/Cmd+Alt+Shift+C</span></button>
       <button onclick="menuAction(renameColumn)"><span>Rename Column</span><span class="menu-shortcut">F2</span></button>
       <button onclick="menuAction(duplicateSelection)"><span>Duplicate Selection</span><span class="menu-shortcut">Ctrl/Cmd+D</span></button>
       <button onclick="menuAction(mergeSelection)"><span>Merge Cells</span><span class="menu-shortcut">Ctrl/Cmd+Alt+M</span></button>
@@ -1131,12 +1136,47 @@ function activeTableForDelete() {
   return rows.every(r => r >= tbl.dataRowStart && r <= tbl.dataRowEnd) ? tbl : null;
 }
 
+function activeTableForInsert() {
+  if (_activeCell.r < 0 || _activeCell.c < 0) return null;
+  return tableForCell(_activeCell.r, _activeCell.c, true);
+}
+
+function activeTableForColumnAction() {
+  if (_activeCell.r < 0 || _activeCell.c < 0) return null;
+  const tbl = tableForCell(_activeCell.r, _activeCell.c, true);
+  if (!tbl) return null;
+  const cols = selectedCols.size ? [...selectedCols] : [_activeCell.c];
+  return cols.every(c => c >= tbl.colStart && c <= tbl.colEnd) ? tbl : null;
+}
+
 function updateEditMenuForSelection() {
+  const tableInsert = !!activeTableForInsert();
   const tableDelete = !!activeTableForDelete();
+  const tableColumn = !!activeTableForColumnAction();
+  const rowBeforeBtn = document.getElementById('insert-row-before-btn');
+  const tableRowBeforeBtn = document.getElementById('insert-table-row-before-btn');
+  const rowAfterBtn = document.getElementById('insert-row-after-btn');
+  const tableRowAfterBtn = document.getElementById('insert-table-row-after-btn');
   const rowBtn = document.getElementById('remove-row-btn');
   const tableRowBtn = document.getElementById('remove-table-row-btn');
+  const colBeforeBtn = document.getElementById('insert-col-before-btn');
+  const tableColBeforeBtn = document.getElementById('insert-table-col-before-btn');
+  const colAfterBtn = document.getElementById('insert-col-after-btn');
+  const tableColAfterBtn = document.getElementById('insert-table-col-after-btn');
+  const colBtn = document.getElementById('remove-col-btn');
+  const tableColBtn = document.getElementById('remove-table-col-btn');
+  if (rowBeforeBtn) rowBeforeBtn.hidden = tableInsert;
+  if (tableRowBeforeBtn) tableRowBeforeBtn.hidden = !tableInsert;
+  if (rowAfterBtn) rowAfterBtn.hidden = tableInsert;
+  if (tableRowAfterBtn) tableRowAfterBtn.hidden = !tableInsert;
   if (rowBtn) rowBtn.hidden = tableDelete;
   if (tableRowBtn) tableRowBtn.hidden = !tableDelete;
+  if (colBeforeBtn) colBeforeBtn.hidden = tableColumn;
+  if (tableColBeforeBtn) tableColBeforeBtn.hidden = !tableColumn;
+  if (colAfterBtn) colAfterBtn.hidden = tableColumn;
+  if (tableColAfterBtn) tableColAfterBtn.hidden = !tableColumn;
+  if (colBtn) colBtn.hidden = tableColumn;
+  if (tableColBtn) tableColBtn.hidden = !tableColumn;
 }
 
 function updateSearchButtons() {
@@ -1160,7 +1200,7 @@ function isFormulaValue(val) {
 }
 
 function applyNumFmt(value, fmt) {
-  if (typeof value !== 'number' || isNaN(value)) return null;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
 
   // Split format into sections (positive; negative; zero; text) on unquoted semicolons
   const sections = [];
@@ -1246,7 +1286,10 @@ function formatCellValue(value) {
     return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
   }
   if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-  if (typeof value === 'number') return Number.isInteger(value) ? String(value) : String(value);
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return '#DIV/0!';
+    return Number.isInteger(value) ? String(value) : String(value);
+  }
   return String(value);
 }
 
@@ -1509,7 +1552,8 @@ function evalFormulaExpression(expr, context = new Set()) {
     .replace(/\^/g, '**');
   try {
     // eslint-disable-next-line no-new-func
-    return Function(`return (${jsExpr});`)();
+    const result = Function(`return (${jsExpr});`)();
+    return (typeof result === 'number' && !Number.isFinite(result)) ? '#DIV/0!' : result;
   } catch {
     return '#ERROR!';
   }
@@ -3667,6 +3711,10 @@ function duplicateSelection() {
 }
 
 function addRow(beforeCurrent = false) {
+  if (activeTableForInsert()) {
+    addTableRow(beforeCurrent);
+    return;
+  }
   const insertAt = selectedRows.size > 0
     ? (beforeCurrent ? Math.min(...selectedRows) : Math.max(...selectedRows) + 1)
     : (beforeCurrent ? 0 : S.rows.length);
@@ -3680,6 +3728,45 @@ function addRow(beforeCurrent = false) {
   markModified();
   renderRows();
   focusCell(insertAt, selectedCols.size > 0 ? Math.min(...selectedCols) : 0);
+}
+
+function ensureSheetRow(rowIdx) {
+  while (S.rows.length <= rowIdx) {
+    S.rows.push(Array(S.headers.length).fill(''));
+    if (_cellStyles?.rowStyles) _cellStyles.rowStyles.push(Array(S.headers.length).fill(null));
+    baseline.rows.push(null);
+  }
+}
+
+function insertOneTableRow(tbl, insertAt) {
+  const tableEnd = tbl.hasTotalsRow ? tbl.totalsBodyRow : tbl.dataRowEnd;
+  ensureSheetRow(tableEnd + 1);
+  for (let r = tableEnd; r >= insertAt; r--) {
+    for (let c = tbl.colStart; c <= tbl.colEnd; c++) copyTableCell(r, r + 1, c);
+  }
+  for (let c = tbl.colStart; c <= tbl.colEnd; c++) clearTableCell(insertAt, c);
+  tbl.dataRowEnd += 1;
+  if (tbl.hasTotalsRow && tbl.totalsBodyRow != null) tbl.totalsBodyRow += 1;
+}
+
+function addTableRow(beforeCurrent = false) {
+  const tbl = activeTableForInsert();
+  if (!tbl) return addRow(beforeCurrent);
+  const anchor = selectedRows.size
+    ? (beforeCurrent ? Math.min(...selectedRows) : Math.max(...selectedRows))
+    : _activeCell.r;
+  const insertAt = Math.max(
+    tbl.dataRowStart,
+    Math.min(tbl.dataRowEnd + 1, beforeCurrent ? anchor : anchor + 1)
+  );
+  insertOneTableRow(tbl, insertAt);
+  selectedRows = new Set([insertAt]);
+  selectedCols = new Set([Math.min(Math.max(_activeCell.c, tbl.colStart), tbl.colEnd)]);
+  anchorRow = insertAt;
+  anchorCol = Math.min(...selectedCols);
+  markModified();
+  render();
+  focusCell(insertAt, anchorCol);
 }
 
 function deleteSelectedRow() {
@@ -3713,6 +3800,14 @@ function clearTableCell(rowIdx, colIdx) {
   if (baseline.rows?.[rowIdx]) baseline.rows[rowIdx][colIdx] = '';
 }
 
+function tableRowStart(tbl) {
+  return tbl.headerArea === 'body' && tbl.headerBodyRow != null ? tbl.headerBodyRow : tbl.dataRowStart;
+}
+
+function tableRowEnd(tbl) {
+  return tbl.hasTotalsRow && tbl.totalsBodyRow != null ? tbl.totalsBodyRow : tbl.dataRowEnd;
+}
+
 function copyTableCell(fromRow, toRow, colIdx) {
   if (!S.rows[fromRow] || !S.rows[toRow]) return;
   S.rows[toRow][colIdx] = S.rows[fromRow][colIdx] ?? '';
@@ -3721,6 +3816,40 @@ function copyTableCell(fromRow, toRow, colIdx) {
     _cellStyles.rowStyles[toRow][colIdx] = cloneStyleCell(_cellStyles.rowStyles[fromRow]?.[colIdx]);
   }
   if (baseline.rows?.[toRow]) baseline.rows[toRow][colIdx] = baseline.rows?.[fromRow]?.[colIdx] ?? '';
+}
+
+function copyTableColumnCell(rowIdx, fromCol, toCol) {
+  while (S.headers.length <= toCol) S.headers.push(excelColName(S.headers.length));
+  while (S.rows[rowIdx]?.length <= toCol) S.rows[rowIdx].push('');
+  if (baseline.rows?.[rowIdx]) while (baseline.rows[rowIdx].length <= toCol) baseline.rows[rowIdx].push('');
+  if (_cellStyles?.headerStyles) while (_cellStyles.headerStyles.length <= toCol) _cellStyles.headerStyles.push(null);
+  if (_cellStyles?.rowStyles?.[rowIdx]) while (_cellStyles.rowStyles[rowIdx].length <= toCol) _cellStyles.rowStyles[rowIdx].push(null);
+
+  if (rowIdx === -1) {
+    S.headers[toCol] = S.headers[fromCol] ?? excelColName(toCol);
+    if (_cellStyles?.headerStyles) _cellStyles.headerStyles[toCol] = cloneStyleCell(_cellStyles.headerStyles[fromCol]);
+    return;
+  }
+  if (!S.rows[rowIdx]) return;
+  S.rows[rowIdx][toCol] = S.rows[rowIdx][fromCol] ?? '';
+  if (_cellStyles?.rowStyles?.[rowIdx]) _cellStyles.rowStyles[rowIdx][toCol] = cloneStyleCell(_cellStyles.rowStyles[rowIdx][fromCol]);
+  if (baseline.rows?.[rowIdx]) baseline.rows[rowIdx][toCol] = baseline.rows[rowIdx]?.[fromCol] ?? '';
+}
+
+function clearTableColumnCell(rowIdx, colIdx) {
+  if (rowIdx === -1) {
+    S.headers[colIdx] = '';
+    if (_cellStyles?.headerStyles) _cellStyles.headerStyles[colIdx] = null;
+    return;
+  }
+  clearTableCell(rowIdx, colIdx);
+}
+
+function tableRowsForColumnAction(tbl) {
+  const rows = [];
+  if (tbl.headerArea === 'header') rows.push(-1);
+  for (let r = tableRowStart(tbl); r <= tableRowEnd(tbl); r++) rows.push(r);
+  return rows;
 }
 
 function deleteOneTableRow(tbl, rowIdx) {
@@ -3754,6 +3883,10 @@ function deleteSelectedTableRows() {
 }
 
 function addColumn(beforeCurrent = false) {
+  if (activeTableForColumnAction()) {
+    addTableColumn(beforeCurrent);
+    return;
+  }
   const insertAt = selectedCols.size > 0
     ? (beforeCurrent ? Math.min(...selectedCols) : Math.max(...selectedCols) + 1)
     : (beforeCurrent ? 0 : S.headers.length);
@@ -3771,7 +3904,41 @@ function addColumn(beforeCurrent = false) {
   });
 }
 
+function insertOneTableColumn(tbl, insertAt) {
+  const rowIndexes = tableRowsForColumnAction(tbl);
+  const shiftEnd = Math.max(tbl.colEnd + 1, S.headers.length - 1);
+  rowIndexes.forEach(r => {
+    for (let c = shiftEnd; c >= insertAt; c--) copyTableColumnCell(r, c, c + 1);
+    clearTableColumnCell(r, insertAt);
+  });
+  tbl.colEnd += 1;
+}
+
+function addTableColumn(beforeCurrent = false) {
+  const tbl = activeTableForColumnAction();
+  if (!tbl) return addColumn(beforeCurrent);
+  const anchor = selectedCols.size
+    ? (beforeCurrent ? Math.min(...selectedCols) : Math.max(...selectedCols))
+    : _activeCell.c;
+  const insertAt = Math.max(
+    tbl.colStart,
+    Math.min(tbl.colEnd + 1, beforeCurrent ? anchor : anchor + 1)
+  );
+  insertOneTableColumn(tbl, insertAt);
+  selectedCols = new Set([insertAt]);
+  selectedRows = new Set([Math.min(Math.max(_activeCell.r, tbl.dataRowStart), tbl.dataRowEnd)]);
+  anchorCol = insertAt;
+  anchorRow = Math.min(...selectedRows);
+  markModified();
+  render();
+  focusCell(anchorRow, insertAt);
+}
+
 function deleteColumn() {
+  if (activeTableForColumnAction()) {
+    deleteSelectedTableColumns();
+    return;
+  }
   if (S.headers.length === 0 || selectedCols.size === 0) return;
   const toDelete = [...selectedCols].sort((a, b) => b - a);
   const label = toDelete.length === 1
@@ -3786,6 +3953,36 @@ function deleteColumn() {
   selectedCols = next >= 0 ? new Set([next]) : new Set(); anchorCol = next;
   markModified();
   render();
+}
+
+function deleteOneTableColumn(tbl, colIdx) {
+  const rowIndexes = tableRowsForColumnAction(tbl);
+  const shiftEnd = Math.max(tbl.colEnd, S.headers.length - 1);
+  rowIndexes.forEach(r => {
+    for (let c = colIdx; c < shiftEnd; c++) copyTableColumnCell(r, c + 1, c);
+    clearTableColumnCell(r, shiftEnd);
+  });
+  tbl.colEnd -= 1;
+}
+
+function deleteSelectedTableColumns() {
+  const tbl = activeTableForColumnAction();
+  if (!tbl) return deleteColumn();
+  const toDelete = [...(selectedCols.size ? selectedCols : new Set([_activeCell.c]))]
+    .filter(c => c >= tbl.colStart && c <= tbl.colEnd)
+    .sort((a, b) => b - a);
+  if (!toDelete.length) return;
+  const label = toDelete.length === 1 ? 'table column' : `${toDelete.length} table columns`;
+  if (!confirm(`Delete ${label}?`)) return;
+  toDelete.forEach(c => deleteOneTableColumn(tbl, c));
+  const next = Math.min(toDelete[toDelete.length - 1], Math.max(tbl.colStart, tbl.colEnd));
+  selectedCols = next >= tbl.colStart && next <= tbl.colEnd ? new Set([next]) : new Set();
+  selectedRows = new Set([Math.min(Math.max(_activeCell.r, tbl.dataRowStart), tbl.dataRowEnd)]);
+  anchorCol = next;
+  anchorRow = Math.min(...selectedRows);
+  markModified();
+  render();
+  if (selectedCols.size) focusCell(anchorRow, next);
 }
 
 function renameColumn(idx) {
