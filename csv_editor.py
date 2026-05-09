@@ -1449,6 +1449,7 @@ class Handler(BaseHTTPRequestHandler):
             active['headerStyles'] = data.get('headerStyles', active.get('headerStyles', []))
             active['rowStyles'] = data.get('rowStyles', active.get('rowStyles', []))
             active['merges'] = data.get('merges', active.get('merges', []))
+            active['tableDefinitions'] = data.get('tableDefinitions', active.get('tableDefinitions', []))
             self._json({'ok': True})
 
         elif self.path == '/api/save':
