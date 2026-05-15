@@ -313,24 +313,11 @@
   tbody tr.even { background: #fff; }
   tbody tr.odd  { background: #f6f9ff; }
   tbody tr:hover { background: #edf3fc; }
-  tbody tr.selected-row { background: #d6e8ff !important; }
+  tbody tr.selected-row td.row-num { background: #a8c4e8; }
   tbody tr.sheet-header-row { background: #dce8f7; }
   tbody tr.sheet-header-row:hover { background: #c8d8ee; }
 
-  thead th.selected-col { background: #a8c4e8; }
-  tbody td.selected-col::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(100,160,255,.10);
-    pointer-events: none;
-    z-index: 0;
-  }
-  tbody tr.selected-row td.selected-col::after { background: rgba(80,140,255,.30); }
-  tbody td.cell-modified.selected-col::after { background: rgba(210, 214, 112, 0.22); }
-  tbody tr.selected-row td.cell-modified.selected-col::after { background: rgba(190, 196, 96, 0.34); }
-  tbody td.cell-diff-changed.selected-col::after { background: rgba(224, 226, 64, 0.24); }
-  tbody tr.selected-row td.cell-diff-changed.selected-col::after { background: rgba(206, 210, 54, 0.36); }
+  #excel-col-row th.selected-col { background: #a8c4e8; }
   tbody td > * {
     position: relative;
     z-index: 1;
@@ -392,6 +379,7 @@
     background: white !important;
     border: none !important;
   }
+  #excel-col-row th.blank-col-header.selected-col { background: #a8c4e8 !important; }
   #csv-table.no-gridlines tbody td {
     border: none !important;
   }
@@ -2512,6 +2500,8 @@ function renderHeaders() {
     excelTh.textContent = excelColName(i);
     excelTh.style.minWidth = '0';
     excelTh.className = 'blank-col-header';
+    excelTh.dataset.colStart = String(i);
+    excelTh.dataset.colSpan = '1';
     excelTr.appendChild(excelTh);
   }
 }
@@ -2937,6 +2927,19 @@ function renderRows() {
       }
       syncTdDisplayLayer(td, merges, mergeMap);
     });
+
+    // Phantom cells beyond the data columns so drag-selection can extend into them
+    const phantomColCount = excelLetterColumnCount();
+    for (let c = S.headers.length; c < phantomColCount; c++) {
+      const td = document.createElement('td');
+      td.dataset.rowStart = String(r);
+      td.dataset.rowSpan = '1';
+      td.dataset.colStart = String(c);
+      td.dataset.colSpan = '1';
+      td.classList.add('blank-cell');
+      if (colSelectionOverlaps(c, 1)) td.classList.add('selected-col');
+      tr.appendChild(td);
+    }
 
     frag.appendChild(tr);
     if (_inlineDiff && !virtualized && r + 1 !== headerIdx) insertIncoming(r + 1);
