@@ -6,7 +6,7 @@ Usage:
   python3 csv_editor.py data.csv     # open a file directly
 """
 
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.1.2"
 
 import base64
 import csv
