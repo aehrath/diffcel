@@ -1,4 +1,6 @@
-# my_test_apps
+# diffcel
+
+Diffing and managing spreadsheets the easy way
 
 ![GitHub tag](https://img.shields.io/github/v/tag/aehrath/my_test_apps)
 
