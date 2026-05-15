@@ -3808,14 +3808,33 @@ function tableRowEnd(tbl) {
   return tbl.hasTotalsRow && tbl.totalsBodyRow != null ? tbl.totalsBodyRow : tbl.dataRowEnd;
 }
 
+function excelColIndex(name) {
+  let idx = 0;
+  for (const ch of String(name).toUpperCase()) idx = idx * 26 + (ch.charCodeAt(0) - 64);
+  return idx - 1;
+}
+
+function shiftFormulaReferences(formula, rowDelta = 0, colDelta = 0) {
+  if (!isFormulaValue(formula) || (!rowDelta && !colDelta)) return formula;
+  return formula.replace(/(\$?)([A-Z]{1,3})(\$?)(\d+)/g, (match, absCol, colName, absRow, rowText) => {
+    const nextCol = absCol ? colName : excelColName(Math.max(0, excelColIndex(colName) + colDelta));
+    const nextRowNum = absRow ? Number(rowText) : Math.max(1, Number(rowText) + rowDelta);
+    return `${absCol}${nextCol}${absRow}${nextRowNum}`;
+  });
+}
+
 function copyTableCell(fromRow, toRow, colIdx) {
   if (!S.rows[fromRow] || !S.rows[toRow]) return;
-  S.rows[toRow][colIdx] = S.rows[fromRow][colIdx] ?? '';
+  const value = S.rows[fromRow][colIdx] ?? '';
+  S.rows[toRow][colIdx] = shiftFormulaReferences(value, sheetRowNumberForBodyRow(toRow) - sheetRowNumberForBodyRow(fromRow), 0);
   if (_cellStyles?.rowStyles) {
     _cellStyles.rowStyles[toRow] = _cellStyles.rowStyles[toRow] || Array(S.headers.length).fill(null);
     _cellStyles.rowStyles[toRow][colIdx] = cloneStyleCell(_cellStyles.rowStyles[fromRow]?.[colIdx]);
   }
-  if (baseline.rows?.[toRow]) baseline.rows[toRow][colIdx] = baseline.rows?.[fromRow]?.[colIdx] ?? '';
+  if (baseline.rows?.[toRow]) {
+    const baselineValue = baseline.rows?.[fromRow]?.[colIdx] ?? '';
+    baseline.rows[toRow][colIdx] = shiftFormulaReferences(baselineValue, sheetRowNumberForBodyRow(toRow) - sheetRowNumberForBodyRow(fromRow), 0);
+  }
 }
 
 function copyTableColumnCell(rowIdx, fromCol, toCol) {
@@ -3831,9 +3850,13 @@ function copyTableColumnCell(rowIdx, fromCol, toCol) {
     return;
   }
   if (!S.rows[rowIdx]) return;
-  S.rows[rowIdx][toCol] = S.rows[rowIdx][fromCol] ?? '';
+  const value = S.rows[rowIdx][fromCol] ?? '';
+  S.rows[rowIdx][toCol] = shiftFormulaReferences(value, 0, toCol - fromCol);
   if (_cellStyles?.rowStyles?.[rowIdx]) _cellStyles.rowStyles[rowIdx][toCol] = cloneStyleCell(_cellStyles.rowStyles[rowIdx][fromCol]);
-  if (baseline.rows?.[rowIdx]) baseline.rows[rowIdx][toCol] = baseline.rows[rowIdx]?.[fromCol] ?? '';
+  if (baseline.rows?.[rowIdx]) {
+    const baselineValue = baseline.rows[rowIdx]?.[fromCol] ?? '';
+    baseline.rows[rowIdx][toCol] = shiftFormulaReferences(baselineValue, 0, toCol - fromCol);
+  }
 }
 
 function clearTableColumnCell(rowIdx, colIdx) {
@@ -3852,12 +3875,35 @@ function tableRowsForColumnAction(tbl) {
   return rows;
 }
 
+function tableRowHasMeaningfulData(tbl, rowIdx) {
+  for (let c = tbl.colStart; c <= tbl.colEnd; c++) {
+    const raw = getRawCellValue(rowIdx, c);
+    if (isFormulaValue(raw)) {
+      const value = evaluateCellValue(rowIdx, c, new Set());
+      const text = formatCellValue(value).trim();
+      if (text && !text.startsWith('#')) return true;
+    } else if (String(raw ?? '').trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function meaningfulTableDataEnd(tbl) {
+  for (let r = tbl.dataRowEnd; r >= tbl.dataRowStart; r--) {
+    if (tableRowHasMeaningfulData(tbl, r)) return r;
+  }
+  return tbl.dataRowStart - 1;
+}
+
 function deleteOneTableRow(tbl, rowIdx) {
   const tableEnd = tbl.hasTotalsRow ? tbl.totalsBodyRow : tbl.dataRowEnd;
-  for (let r = rowIdx; r < tableEnd; r++) {
+  const meaningfulEnd = meaningfulTableDataEnd(tbl);
+  const shiftEnd = rowIdx <= meaningfulEnd ? meaningfulEnd : tableEnd;
+  for (let r = rowIdx; r < shiftEnd; r++) {
     for (let c = tbl.colStart; c <= tbl.colEnd; c++) copyTableCell(r + 1, r, c);
   }
-  for (let c = tbl.colStart; c <= tbl.colEnd; c++) clearTableCell(tableEnd, c);
+  for (let c = tbl.colStart; c <= tbl.colEnd; c++) clearTableCell(shiftEnd, c);
   tbl.dataRowEnd -= 1;
   if (tbl.hasTotalsRow && tbl.totalsBodyRow != null) tbl.totalsBodyRow -= 1;
 }
