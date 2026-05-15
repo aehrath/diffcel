@@ -1060,6 +1060,7 @@ let _zoomPercent = 100;
 let _columnFilters = {};
 let _headerFilterState = null;
 let _tableScrollRaf = 0;
+let _phantomRowCount = 0;        // phantom rows appended below data
 const _versionDataCache = new Map();
 const _parsedVersionCache = new Map();
 let _formulaCache = null;          // Map<"r,c", string> — cleared on data change
@@ -2713,12 +2714,50 @@ function onTableScroll() {
   if (_tableScrollRaf) return;
   _tableScrollRaf = requestAnimationFrame(() => {
     _tableScrollRaf = 0;
+    const wrap = document.getElementById('table-wrap');
     const merges = normalizedSheetMerges();
     const visibleRows = getFilteredRowIndexes();
-    if (!shouldVirtualizeRows(visibleRows, merges)) return;
-    renderRows();
-    updateSelectionUI();
+    if (shouldVirtualizeRows(visibleRows, merges)) {
+      renderRows();
+      updateSelectionUI();
+      return;
+    }
+    // Extend phantom rows when scrolling near the bottom
+    if (wrap && wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - wrap.clientHeight * 0.5) {
+      extendPhantomRows(20);
+    }
   });
+}
+
+function extendPhantomRows(count) {
+  const tbody = document.getElementById('table-body');
+  if (!tbody) return;
+  const colCount = Math.max(S.headers.length, excelLetterColumnCount());
+  const frag = document.createDocumentFragment();
+  for (let pr = 0; pr < count; pr++) {
+    const rowIdx = S.rows.length + _phantomRowCount + pr;
+    const tr = document.createElement('tr');
+    tr.dataset.rowIndex = String(rowIdx);
+    if (selectedRows.has(rowIdx)) tr.classList.add('selected-row');
+    const rn = document.createElement('td');
+    rn.className = 'row-num';
+    rn.textContent = String(sheetRowNumberForBodyRow(rowIdx));
+    rn.title = 'Click • Shift+click to range • Cmd+click to toggle';
+    tr.appendChild(rn);
+    for (let c = 0; c < colCount; c++) {
+      const td = document.createElement('td');
+      td.dataset.rowStart = String(rowIdx);
+      td.dataset.rowSpan = '1';
+      td.dataset.colStart = String(c);
+      td.dataset.colSpan = '1';
+      td.classList.add('blank-cell');
+      if (colSelectionOverlaps(c, 1)) td.classList.add('selected-col');
+      tr.appendChild(td);
+    }
+    frag.appendChild(tr);
+  }
+  tbody.appendChild(frag);
+  _phantomRowCount += count;
 }
 
 function syncTdDisplayLayer(td, merges, mergeMap) {
@@ -2947,6 +2986,39 @@ function renderRows() {
   if (virtualized && endItem < displayItems.length) {
     frag.appendChild(createVirtualSpacerRow((displayItems.length - endItem) * rowHeight, S.headers.length + 1));
   }
+
+  // Phantom rows to fill the viewport below the data
+  _phantomRowCount = 0;
+  if (!virtualized) {
+    const viewportH = wrap?.clientHeight || window.innerHeight || 600;
+    const occupiedH = visibleRows.length * rowHeight;
+    const fillRows = Math.max(0, Math.ceil((viewportH - occupiedH) / rowHeight)) + 3;
+    _phantomRowCount = fillRows;
+    const colCount = Math.max(S.headers.length, excelLetterColumnCount());
+    for (let pr = 0; pr < fillRows; pr++) {
+      const rowIdx = S.rows.length + pr;
+      const tr = document.createElement('tr');
+      tr.dataset.rowIndex = String(rowIdx);
+      if (selectedRows.has(rowIdx)) tr.classList.add('selected-row');
+      const rn = document.createElement('td');
+      rn.className = 'row-num';
+      rn.textContent = String(sheetRowNumberForBodyRow(rowIdx));
+      rn.title = 'Click • Shift+click to range • Cmd+click to toggle';
+      tr.appendChild(rn);
+      for (let c = 0; c < colCount; c++) {
+        const td = document.createElement('td');
+        td.dataset.rowStart = String(rowIdx);
+        td.dataset.rowSpan = '1';
+        td.dataset.colStart = String(c);
+        td.dataset.colSpan = '1';
+        td.classList.add('blank-cell');
+        if (colSelectionOverlaps(c, 1)) td.classList.add('selected-col');
+        tr.appendChild(td);
+      }
+      frag.appendChild(tr);
+    }
+  }
+
   tbody.appendChild(frag);
   if (virtualized && wrap && wrap.scrollTop !== savedScrollTop) wrap.scrollTop = savedScrollTop;
 }
