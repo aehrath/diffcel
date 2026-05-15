@@ -1223,8 +1223,11 @@ function applyNumFmt(value, fmt) {
 
   const absVal = Math.abs(value);
 
-  // Strip color directives [Red], [Blue], [Color3], etc.
-  section = section.replace(/\[[^\]]*\]/g, '');
+  // Strip color/condition directives but extract currency symbols from [$symbol-locale]
+  section = section.replace(/\[([^\]]*)\]/g, (_, inner) => {
+    if (inner.startsWith('$')) return inner.slice(1).replace(/-.*$/, '');
+    return '';
+  });
 
   const isPct = section.includes('%');
   const workVal = isPct ? absVal * 100 : absVal;
@@ -1263,8 +1266,12 @@ function applyNumFmt(value, fmt) {
       i++;
     } else if (ch === '_') {
       i++; // skip padding placeholder (_x = space the width of x)
-    } else if ('#0.,@%E*'.includes(ch)) {
+    } else if (ch === '*') {
+      i++; // skip fill character (*x = repeat x to fill cell width)
+    } else if ('#0.,@%Ee'.includes(ch)) {
       pastNum = true;
+    } else {
+      if (pastNum) suffix += ch; else prefix += ch;
     }
   }
 
@@ -1571,7 +1578,16 @@ function evaluateCellValue(r, c, context = new Set()) {
 
 function displayCellText(r, c) {
   const raw = getRawCellValue(r, c);
-  if (!isFormulaValue(raw)) return raw != null ? raw : '';
+  if (!isFormulaValue(raw)) {
+    if (raw == null) return '';
+    const st = bodyCellStyle(r, c);
+    if (st?.numFmt) {
+      const parsed = parseScalarValue(raw);
+      const formatted = applyNumFmt(parsed, st.numFmt);
+      if (formatted !== null) return formatted;
+    }
+    return raw;
+  }
   if (!_formulaCache) _formulaCache = new Map();
   const key = `${r},${c}`;
   if (_formulaCache.has(key)) return _formulaCache.get(key);
