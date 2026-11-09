@@ -1061,6 +1061,7 @@ let _columnFilters = {};
 let _headerFilterState = null;
 let _tableScrollRaf = 0;
 let _phantomRowCount = 0;        // phantom rows appended below data
+let _phantomColCount = 0;        // phantom cols appended right of data
 const _versionDataCache = new Map();
 const _parsedVersionCache = new Map();
 let _formulaCache = null;          // Map<"r,c", string> — cleared on data change
@@ -2289,7 +2290,7 @@ function hasExcelLetterHeaders() {
 function excelLetterColumnCount(widths = null) {
   const letterHeaders = hasExcelLetterHeaders();
   const isXlsx = S.filetype === 'xlsx' || (S.filepath || '').toLowerCase().endsWith('.xlsx');
-  if (!letterHeaders && !isXlsx) return 0;
+  if (!letterHeaders && !isXlsx && S.headers.length > 0) return 0;
 
   const scale = _zoomPercent / 100;
   const defaultPx = excelWidthToPixels(8.43);
@@ -2457,7 +2458,7 @@ function renderHeaders() {
   const isXlsx = S.filetype === 'xlsx' || (S.filepath || '').toLowerCase().endsWith('.xlsx');
   // Show the column-letter row whenever it's an xlsx file (like Excel always does)
   // or when the headers themselves are the generated A/B/C letters.
-  const showLetterRow = letterHeaders || isXlsx;
+  const showLetterRow = letterHeaders || isXlsx || S.headers.length === 0;
   const excelTr = document.getElementById('excel-col-row');
   const tr = document.getElementById('header-row');
   excelTr.innerHTML = '';
@@ -2505,6 +2506,7 @@ function renderHeaders() {
     excelTh.dataset.colSpan = '1';
     excelTr.appendChild(excelTh);
   }
+  _phantomColCount = letterColumnCount - S.headers.length;
 }
 
 function applyExcelStyle(td, inp, st) {
@@ -2726,6 +2728,10 @@ function onTableScroll() {
     if (wrap && wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - wrap.clientHeight * 0.5) {
       extendPhantomRows(20);
     }
+    // Extend phantom cols when scrolling near the right edge
+    if (wrap && wrap.scrollLeft + wrap.clientWidth >= wrap.scrollWidth - wrap.clientWidth * 0.5) {
+      extendPhantomCols(10);
+    }
   });
 }
 
@@ -2758,6 +2764,67 @@ function extendPhantomRows(count) {
   }
   tbody.appendChild(frag);
   _phantomRowCount += count;
+}
+
+function extendPhantomCols(count) {
+  const excelTr = document.getElementById('excel-col-row');
+  const sizerRow = document.getElementById('header-row');
+  const colgroup = document.getElementById('table-colgroup');
+  const tbody = document.getElementById('table-body');
+  if (!excelTr || !tbody) return;
+
+  const scale = _zoomPercent / 100;
+  const width = Math.round(excelWidthToPixels(8.43) * scale) + 'px';
+  const startCol = S.headers.length + _phantomColCount;
+
+  for (let i = 0; i < count; i++) {
+    const c = startCol + i;
+    // Letter header th
+    const excelTh = document.createElement('th');
+    excelTh.textContent = excelColName(c);
+    excelTh.className = 'blank-col-header';
+    excelTh.dataset.colStart = String(c);
+    excelTh.dataset.colSpan = '1';
+    excelTh.style.width = width;
+    excelTh.style.minWidth = width;
+    if (colSelectionOverlaps(c, 1)) excelTh.classList.add('selected-col');
+    excelTr.appendChild(excelTh);
+    // Sizer th
+    if (sizerRow) {
+      const sizerTh = document.createElement('th');
+      sizerTh.style.width = width;
+      sizerTh.style.minWidth = width;
+      sizerRow.appendChild(sizerTh);
+    }
+    // Colgroup col
+    if (colgroup) {
+      const col = document.createElement('col');
+      col.style.width = width;
+      colgroup.appendChild(col);
+    }
+  }
+
+  // Add td to all body rows
+  for (const tr of tbody.rows) {
+    if (tr.classList.contains('virtual-spacer') ||
+        tr.classList.contains('sheet-header-row') ||
+        tr.classList.contains('row-diff-ghost')) continue;
+    const rowStart = tr.dataset.rowIndex;
+    if (rowStart === undefined) continue;
+    for (let i = 0; i < count; i++) {
+      const c = startCol + i;
+      const td = document.createElement('td');
+      td.dataset.rowStart = rowStart;
+      td.dataset.rowSpan = '1';
+      td.dataset.colStart = String(c);
+      td.dataset.colSpan = '1';
+      td.classList.add('blank-cell');
+      if (colSelectionOverlaps(c, 1)) td.classList.add('selected-col');
+      tr.appendChild(td);
+    }
+  }
+
+  _phantomColCount += count;
 }
 
 function syncTdDisplayLayer(td, merges, mergeMap) {
